@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package order;
+
+// Go specific option: tells the compiler where to put the generated code
+option go_package = "gophermart/proto/order";
+
+// The Service Definition
+service OrderService {
+  // Method: Create a new order
+  rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
+}
+
+// The Input Message
+message CreateOrderRequest {
+  string user_id = 1;
+  repeated OrderItem items = 2;
+}
+
+message OrderItem {
+  string product_id = 1;
+  int32 quantity = 2;
+}
+
+// The Output Message
+message CreateOrderResponse {
+  string order_id = 1;
+  string status = 2;
+}
