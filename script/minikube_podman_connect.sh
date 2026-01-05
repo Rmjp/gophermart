@@ -1,0 +1,1 @@
+eval $(minikube podman-env)
