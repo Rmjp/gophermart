@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: gophermart-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+    spec:
+      containers:
+        - name: jaeger
+          image: docker.io/jaegertracing/all-in-one:1.50
+          env:
+            - name: COLLECTOR_OTLP_ENABLED
+              value: "true"
+          ports:
+            - containerPort: 16686 # UI
+            - containerPort: 4317  # OTLP gRPC (Receives traces)
+            - containerPort: 4318  # OTLP HTTP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: gophermart-dev
+spec:
+  selector:
+    app: jaeger
+  ports:
+    - name: ui
+      port: 16686
+      targetPort: 16686
+      nodePort: 30001 # Access UI at localhost:30001
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+  type: NodePort
