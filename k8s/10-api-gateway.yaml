@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: gophermart-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+        - name: api-gateway
+          image: api-gateway:latest # We will build this later!
+          imagePullPolicy: Never    # Use local image
+          ports:
+            - containerPort: 8080
+          env:
+            - name: REDIS_ADDR
+              value: "redis:6379"   # K8s DNS resolution!
+            - name: POSTGRES_URL
+              value: "postgres://gopher:gopherpass@postgres:5432/gophermart"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: gophermart-dev
+spec:
+  type: NodePort # Expose to outside (or use LoadBalancer)
+  selector:
+    app: api-gateway
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      nodePort: 30000 # Fixed port for easy access
