@@ -20,6 +20,8 @@ import (
 
 	// Import our generated code
 	pb "gophermart/proto"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
@@ -82,6 +84,10 @@ func main() {
 
 	// NEW: Create Order Endpoint
 	r.POST("/orders", createOrderHandler)
+
+	// --- NEW: Metrics Endpoint ---
+	// Prometheus will scrape this URL every 15 seconds
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	log.Println("🚀 API Gateway starting on :8080")
 	r.Run(":8080")

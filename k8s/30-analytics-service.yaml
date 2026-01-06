@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-service
+  namespace: gophermart-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics-service
+  template:
+    metadata:
+      labels:
+        app: analytics-service
+    spec:
+      containers:
+        - name: analytics-service
+          image: localhost/analytics-service:latest
+          imagePullPolicy: Never
+          env:
+            - name: KAFKA_ADDR
+              value: "kafka:9092"
+            - name: MONGO_URI
+              value: "mongodb://admin:password@mongodb:27017"

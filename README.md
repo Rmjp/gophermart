@@ -16,3 +16,8 @@ kubectl rollout -n <namespace> deployment <name>
 ```
 kubectl exec -it -n gophermart-dev deployment/postgres -- psql -U gopher -d gophermart -c "SELECT * FROM orders;"
 ```
+
+## kafka consumer log
+```
+kubectl exec -it deployment/kafka -n gophermart-dev -- kafka-console-consumer --bootstrap-server localhost:9092 --topic gophermart.orders.created.v1 --from-beginning
+```

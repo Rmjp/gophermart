@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -53,6 +54,23 @@ func runMigrations(db *sql.DB) error {
 	return nil
 }
 
+// ValidateOrder checks if the request is valid BEFORE we touch the DB.
+// This is a "Pure Function" -> Input in, Error out. Perfect for Unit Testing.
+func ValidateOrder(req *pb.CreateOrderRequest) error {
+	if req.UserId == "" {
+		return errors.New("user_id cannot be empty")
+	}
+	if len(req.Items) == 0 {
+		return errors.New("order must have at least one item")
+	}
+	for _, item := range req.Items {
+		if item.Quantity <= 0 {
+			return errors.New("quantity must be positive")
+		}
+	}
+	return nil
+}
+
 // Global DB connection
 var db *sql.DB
 
@@ -62,6 +80,10 @@ type server struct {
 
 func (s *server) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*pb.CreateOrderResponse, error) {
 	log.Printf("📦 Processing Order for User: %s", req.UserId)
+
+	if err := ValidateOrder(req); err != nil {
+		return nil, err // Return error to gRPC client
+	}
 
 	// 1. Generate ID
 	orderID := uuid.New().String()
@@ -166,7 +188,7 @@ func main() {
 	if kafkaAddr == "" {
 		kafkaAddr = "kafka:9092" // K8s Service Name
 	}
-	InitKafka(kafkaAddr, "order-created")
+	InitKafka(kafkaAddr, "gophermart.orders.created.v1")
 	defer CloseKafka()
 
 	// 1. Listen on TCP port 50051
