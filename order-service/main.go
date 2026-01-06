@@ -2,32 +2,136 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"embed"
+	"fmt"
 	"log"
 	"net"
+	"os"
+
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 
 	pb "gophermart/proto" // Importing the generated code
+
 	"google.golang.org/grpc"
+
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
+
+	"github.com/google/uuid" // You need to go get this
+	_ "github.com/lib/pq"    // Postgres driver
 )
 
-// Server struct implements the generated OrderServiceServer interface
+//go:embed migrations/*.sql
+var migrationFiles embed.FS
+
+func runMigrations(db *sql.DB) error {
+	driver, err := postgres.WithInstance(db, &postgres.Config{})
+	if err != nil {
+		return fmt.Errorf("could not create driver: %w", err)
+	}
+
+	// Load files from the embedded filesystem
+	d, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		return fmt.Errorf("could not create source: %w", err)
+	}
+
+	m, err := migrate.NewWithInstance(
+		"iofs", d, "postgres", driver)
+	if err != nil {
+		return fmt.Errorf("could not create migrate instance: %w", err)
+	}
+
+	// Run "Up" to apply all migrations
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+
+	return nil
+}
+
+// Global DB connection
+var db *sql.DB
+
 type server struct {
 	pb.UnimplementedOrderServiceServer
 }
 
-// CreateOrder is the actual business logic
 func (s *server) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*pb.CreateOrderResponse, error) {
-	log.Printf("📦 Received Order from User: %s with %d items", req.UserId, len(req.Items))
+	log.Printf("📦 Processing Order for User: %s", req.UserId)
 
-	// TODO: Save to Postgres (We will add this later)
-	
-	// Mock Response
-	return &pb.CreateOrderResponse{
-		OrderId: "ord-12345-mock",
-		Status:  "PENDING",
-	}, nil
+	// 1. Generate ID
+	orderID := uuid.New().String()
+
+	// 2. Start Transaction
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin tx: %v", err)
+	}
+	// Defer rollback in case of panic/error
+	defer tx.Rollback()
+
+	// 3. Insert Order
+	_, err = tx.ExecContext(ctx,
+		"INSERT INTO orders (order_id, user_id, status) VALUES ($1, $2, 'PENDING')",
+		orderID, req.UserId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert order: %v", err)
+	}
+
+	// 4. Insert Items
+	for _, item := range req.Items {
+		_, err = tx.ExecContext(ctx,
+			"INSERT INTO order_items (order_id, product_id, quantity) VALUES ($1, $2, $3)",
+			orderID, item.ProductId, item.Quantity)
+		if err != nil {
+			return nil, fmt.Errorf("failed to insert item: %v", err)
+		}
+	}
+
+	// 5. Commit
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit tx: %v", err)
+	}
+
+	log.Printf("✅ Order Saved: %s", orderID)
+	return &pb.CreateOrderResponse{OrderId: orderID, Status: "PENDING"}, nil
 }
 
 func main() {
+
+	// --- 1. INIT TRACER ---
+	ctx := context.Background()
+	// Service Name: "order-service"
+	shutdown, err := InitTracer(ctx, "order-service", "jaeger:4317")
+	if err != nil {
+		log.Fatalf("Failed to init tracer: %v", err)
+	}
+	defer shutdown(ctx)
+
+	// --- Init Database ---
+	pgURL := os.Getenv("POSTGRES_URL")
+	if pgURL == "" {
+		pgURL = "postgres://gopher:gopherpass@postgres:5432/gophermart?sslmode=disable"
+	}
+
+	db, err = sql.Open("postgres", pgURL)
+	if err != nil {
+		log.Fatalf("failed to open db: %v", err)
+	}
+	if err := db.Ping(); err != nil {
+		log.Fatalf("failed to connect to db: %v", err)
+	}
+
+	// --- NEW: Run Migrations ---
+	log.Println("🔄 Running Database Migrations...")
+	if err := runMigrations(db); err != nil {
+		log.Fatalf("❌ Migration failed: %v", err)
+	}
+	log.Println("✅ Migrations applied successfully!")
+
 	// 1. Listen on TCP port 50051
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
@@ -35,12 +139,15 @@ func main() {
 	}
 
 	// 2. Create gRPC Server
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		// This "Interceptor" automatically starts a span for every gRPC call
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
 
 	// 3. Register our implementation
 	pb.RegisterOrderServiceServer(s, &server{})
 
-	log.Printf("🚀 Order Service (gRPC) listening on :50051")
+	log.Printf("🚀 Order Service (gRPC + OTel) listening on :50051")
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}

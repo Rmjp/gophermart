@@ -15,6 +15,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+
 	// Import our generated code
 	pb "gophermart/proto"
 )
@@ -36,6 +39,15 @@ func main() {
 		orderServiceAddr = "localhost:50051"
 	}
 
+	// --- 0. INIT TRACER ---
+	// Jaeger is running at "jaeger:4317" inside K8s
+	ctx := context.Background()
+	shutdown, err := InitTracer(ctx, "api-gateway", "jaeger:4317")
+	if err != nil {
+		log.Fatalf("Failed to init tracer: %v", err)
+	}
+	defer shutdown(ctx)
+
 	// --- 1. CONNECT TO REDIS & POSTGRES (Existing code) ---
 	// (Skipping detailed error checks here for brevity, assume they work as before)
 	rdb = redis.NewClient(&redis.Options{Addr: redisAddr})
@@ -43,7 +55,11 @@ func main() {
 
 	// --- 2. CONNECT TO GRPC SERVICE ---
 	// We use "WithTransportCredentials(insecure)" because we haven't set up TLS certificates yet.
-	conn, err := grpc.NewClient(orderServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(orderServiceAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// This middleware automatically injects the Trace ID into the gRPC headers
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 	if err != nil {
 		log.Fatalf("did not connect to Order Service: %v", err)
 	}
@@ -55,6 +71,9 @@ func main() {
 
 	// --- 3. SETUP GIN ROUTER ---
 	r := gin.Default()
+
+	// This will start a span for every HTTP request named "api-gateway"
+	r.Use(otelgin.Middleware("api-gateway"))
 
 	// Existing Health Check
 	r.GET("/health", func(c *gin.Context) {
@@ -86,7 +105,7 @@ func createOrderHandler(c *gin.Context) {
 
 	// C. Call gRPC Service
 	// We create a context with a 1-second timeout so requests don't hang forever
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Second)
 	defer cancel()
 
 	// Construct the gRPC Request Message

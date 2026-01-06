@@ -19,6 +19,9 @@ spec:
           imagePullPolicy: Never
           ports:
             - containerPort: 50051
+          env:
+            - name: POSTGRES_URL
+              value: "postgres://gopher:gopherpass@postgres:5432/gophermart?sslmode=disable"
 ---
 apiVersion: v1
 kind: Service
