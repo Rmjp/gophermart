@@ -1,1 +1,1 @@
-eval $(minikube podman-env)
+minikube service api-gateway -n gophermart-dev
