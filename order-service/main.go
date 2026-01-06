@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 
@@ -97,6 +98,34 @@ func (s *server) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*
 	}
 
 	log.Printf("✅ Order Saved: %s", orderID)
+
+	// --- NEW: Publish to Kafka ---
+	// We do this AFTER commit. If DB fails, we don't send the event.
+	// Ideally, you use the "Outbox Pattern" for 100% safety, but this is fine for now.
+
+	event := OrderCreatedEvent{
+		OrderID:   orderID,
+		UserID:    req.UserId,
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+
+	// Publish!
+	go func() {
+		// We use a separate context with its own timeout (e.g., 10s)
+		// so a slow Kafka doesn't block the goroutine forever.
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		err := PublishOrderCreated(bgCtx, event)
+		if err != nil {
+			// CRITICAL LOG: We can't tell the user anymore (they are gone),
+			// so we must log this so the SysAdmin sees it.
+			log.Printf("❌ [Background] Failed to publish event for order %s: %v", orderID, err)
+		} else {
+			log.Printf("📢 [Background] Event published: %s", orderID)
+		}
+	}()
+
 	return &pb.CreateOrderResponse{OrderId: orderID, Status: "PENDING"}, nil
 }
 
@@ -131,6 +160,14 @@ func main() {
 		log.Fatalf("❌ Migration failed: %v", err)
 	}
 	log.Println("✅ Migrations applied successfully!")
+
+	// --- NEW: Init Kafka ---
+	kafkaAddr := os.Getenv("KAFKA_ADDR")
+	if kafkaAddr == "" {
+		kafkaAddr = "kafka:9092" // K8s Service Name
+	}
+	InitKafka(kafkaAddr, "order-created")
+	defer CloseKafka()
 
 	// 1. Listen on TCP port 50051
 	lis, err := net.Listen("tcp", ":50051")

@@ -105,7 +105,7 @@ func createOrderHandler(c *gin.Context) {
 
 	// C. Call gRPC Service
 	// We create a context with a 1-second timeout so requests don't hang forever
-	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 	defer cancel()
 
 	// Construct the gRPC Request Message
